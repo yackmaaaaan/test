@@ -14,7 +14,9 @@ function parseDet(t,meta){
 
   // HaseLab tile-yolo-26n.onnx:
   // output0 = [1,37,8400]
-  // 37 = cx,cy,w,h + tile confidence + 32 mask coefficients.
+  // 37 = cx,cy,w,h + 1 class logit + 32 mask coefficients.
+  // IMPORTANT: channel 4 is a raw logit in this export, so sigmoid must ALWAYS be applied.
+  // Treating 0 logits as an already-normalized probability caused thousands of false candidates at 0.500.
   // output1 = [1,32,160,160] is the segmentation prototype and is not
   // required when all we need is a rectangular crop of each tile.
   let N,C,at;
@@ -25,17 +27,17 @@ function parseDet(t,meta){
   // Log the actual score distribution. This makes threshold tuning possible.
   let scores=[];
   for(let n=0;n<N;n++){
-    let q=at(n,4); if(q<0||q>1) q=sigmoid(q); scores.push(q);
+    let q=sigmoid(at(n,4)); scores.push(q);
   }
   scores.sort((a,b)=>b-a);
   log('top confidences', scores.slice(0,20).map(v=>v.toFixed(3)).join(', '));
 
-  // Keep a low threshold first; duplicate boxes are removed afterwards.
-  const threshold=0.08;
+  // A raw logit of 0 becomes 0.5 after sigmoid, so the threshold must be > 0.5.
+  // 0.52 keeps weaker true tiles while rejecting the mass of zero-logit background candidates.
+  const threshold=0.52;
   let rows=[];
   for(let n=0;n<N;n++){
-    let x=at(n,0), y=at(n,1), w=at(n,2), h=at(n,3), score=at(n,4);
-    if(score<0||score>1) score=sigmoid(score);
+    let x=at(n,0), y=at(n,1), w=at(n,2), h=at(n,3), score=sigmoid(at(n,4));
     if(score<threshold) continue;
 
     // Exported Ultralytics boxes are in 640x640 letterboxed pixel coordinates.
